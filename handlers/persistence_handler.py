@@ -43,6 +43,10 @@ class PersistenceHandler(TranslationHandler):
         # Only save if successful
         if request.success and request.translations:
             for lang_code, text in request.translations.items():
+                # Skip languages not in target list (e.g., ko)
+                if lang_code not in request.target_langs:
+                    continue
+
                 try:
                     success = self.subtitle_manager.update_text(
                         request.index, lang_code, text

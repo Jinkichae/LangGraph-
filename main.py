@@ -24,15 +24,37 @@ from core.translation_request import TranslationRequest
 from core.subtitle_manager import SubtitleManager
 from core.translation_executor import TranslationExecutor
 from builders.pipeline_builder import TranslationPipelineBuilder
+from langchain.tools import StructuredTool
 
 
 # Suppress warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*Event loop is closed.*")
-warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*Event loop is closed.*")
+warnings.filterwarnings("ignore", message=".*coroutine.*was never awaited.*")
+warnings.filterwarnings("ignore", message=".*Task exception was never retrieved.*")
+warnings.filterwarnings("ignore", message=".*Importing verbose from langchain.*")
+
+# Suppress asyncio debug warnings
+import logging
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 # Windows event loop policy
 if os.name == "nt":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# Set custom asyncio exception handler to suppress event loop closure errors
+def asyncio_exception_handler(loop, context):
+    """Suppress event loop closure errors."""
+    exception = context.get("exception")
+    if exception:
+        error_msg = str(exception).lower()
+        # Suppress specific errors
+        if any(msg in error_msg for msg in ["event loop is closed", "connection_lost"]):
+            return
+    # For other exceptions, use default behavior but suppress output
+    pass
 
 
 class TranslationOrchestrator:
@@ -60,10 +82,14 @@ class TranslationOrchestrator:
 
         # Get model name
         try:
-            self.model_name = AppConstants.MODEL_PRIORITY_LIST[settings.model_priority_index]
+            self.model_name = AppConstants.MODEL_PRIORITY_LIST[
+                settings.model_priority_index
+            ]
         except IndexError:
             self.model_name = AppConstants.MODEL_PRIORITY_LIST[0]
-            self.logger.warning(f"Invalid model index, using default: {self.model_name}")
+            self.logger.warning(
+                f"Invalid model index, using default: {self.model_name}"
+            )
 
         # Create executor
         self.executor = TranslationExecutor(settings, self.model_name, self.logger)
@@ -94,14 +120,12 @@ class TranslationOrchestrator:
         """
         Load progress from index file.
 
-        Returns:
-            Starting index (1-based)
-        """
-        index_path = self.path_manager.get_index_file_path()
-        data = FileUtils.read_json_file(index_path, default={})
+        NOTE: Always returns 1 to start from beginning.
+        Progress loading feature has been disabled.
 
-        if isinstance(data, dict):
-            return data.get("a_index", 1)
+        Returns:
+            Starting index (always 1)
+        """
         return 1
 
     def save_progress(self, index: int):
@@ -199,7 +223,7 @@ class TranslationOrchestrator:
             start_index = 1
 
         self.logger.info(
-            f"Starting batch translation: "
+            f"Starting batch translation from index {start_index}/{total_subs}: "
             f"workers={worker_count}, batch={batch_size}, save_interval={save_interval}"
         )
 
@@ -217,8 +241,13 @@ class TranslationOrchestrator:
                 while current_index <= total_subs and not self._shutdown_event.is_set():
                     # Create batch
                     batch = list(
-                        range(current_index, min(current_index + batch_size, total_subs + 1))
+                        range(
+                            current_index,
+                            min(current_index + batch_size, total_subs + 1),
+                        )
                     )
+
+                    self.logger.info(f"Processing batch: {batch[0]}-{batch[-1]} ({len(batch)} items)")
 
                     # Submit batch
                     future_to_index = {
@@ -268,7 +297,9 @@ class TranslationOrchestrator:
                     # Periodic save
                     if processed_count % save_interval == 0:
                         self.save_progress(current_index + batch_size)
-                        self.logger.info(f"Saving progress at {processed_count} items...")
+                        self.logger.info(
+                            f"Saving progress at {processed_count} items..."
+                        )
                         self.subtitle_manager.save_all()
 
                     current_index += batch_size
@@ -286,7 +317,10 @@ class TranslationOrchestrator:
 
             # Print statistics
             self._print_statistics(
-                total_subs, success_count, retry_success, len(failed_indices) - retry_success
+                total_subs,
+                success_count,
+                retry_success,
+                len(failed_indices) - retry_success,
             )
 
         except KeyboardInterrupt:
@@ -300,7 +334,9 @@ class TranslationOrchestrator:
             self._shutdown_event.set()
             time.sleep(1)
 
-    def _retry_failed_items(self, failed_indices: List[int], max_retries: int = 2) -> int:
+    def _retry_failed_items(
+        self, failed_indices: List[int], max_retries: int = 2
+    ) -> int:
         """
         Retry failed items.
 
@@ -318,7 +354,9 @@ class TranslationOrchestrator:
             if not remaining or self._shutdown_event.is_set():
                 break
 
-            self.logger.info(f"Retry round {retry_round + 1}/{max_retries}: {len(remaining)} items")
+            self.logger.info(
+                f"Retry round {retry_round + 1}/{max_retries}: {len(remaining)} items"
+            )
             current_failed = remaining.copy()
             remaining = []
 
@@ -373,7 +411,9 @@ class TranslationOrchestrator:
         self.logger.info(f"Found {len(failed_indices)} failed items")
         retry_success = self._retry_failed_items(failed_indices, max_retries)
 
-        self.logger.info(f"Manual retry completed: {retry_success}/{len(failed_indices)} succeeded")
+        self.logger.info(
+            f"Manual retry completed: {retry_success}/{len(failed_indices)} succeeded"
+        )
 
     def _print_statistics(
         self, total: int, initial_success: int, retry_success: int, final_failed: int
@@ -411,9 +451,13 @@ def main():
 
     # Optional settings with defaults
     model_priority_index = int(os.getenv("MODEL_PRIORITY_INDEX", "0"))
-    worker_count = int(os.getenv("WORKER_COUNT", str(DefaultSettings.DEFAULT_WORKER_COUNT)))
+    worker_count = int(
+        os.getenv("WORKER_COUNT", str(DefaultSettings.DEFAULT_WORKER_COUNT))
+    )
     batch_size = int(os.getenv("BATCH_SIZE", str(DefaultSettings.DEFAULT_BATCH_SIZE)))
-    save_interval = int(os.getenv("SAVE_INTERVAL", str(DefaultSettings.DEFAULT_SAVE_INTERVAL)))
+    save_interval = int(
+        os.getenv("SAVE_INTERVAL", str(DefaultSettings.DEFAULT_SAVE_INTERVAL))
+    )
 
     # Validate required settings
     if not groq_api_key:

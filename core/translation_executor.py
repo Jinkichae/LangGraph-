@@ -105,7 +105,8 @@ class TranslationExecutor:
             Dictionary of translations or None
         """
         try:
-            for msg in response.get("messages", []):
+            # Iterate in reverse order to get the most recent tool call
+            for msg in reversed(response.get("messages", [])):
                 if hasattr(msg, "tool_calls") and msg.tool_calls:
                     for call in msg.tool_calls:
                         if call.get("name") == "update_translations_in_memory":
@@ -231,10 +232,15 @@ class TranslationExecutor:
             return True, translations, input_t, output_t
 
         except asyncio.TimeoutError:
-            self.logger.error("Translation timeout")
+            self.logger.warning("Translation timeout (will retry)")
             return False, {}, 0, 0
         except Exception as e:
-            self.logger.error(f"Translation execution error: {e}")
+            # Check if it's a retryable LLM error (JSON parsing, rate limit, etc.)
+            error_msg = str(e).lower()
+            if any(err in error_msg for err in ["json", "parse", "rate", "400", "429"]):
+                self.logger.warning(f"Retryable error (will retry): {type(e).__name__}")
+            else:
+                self.logger.error(f"Translation execution error: {e}")
             return False, {}, 0, 0
 
     def execute_sync(
@@ -257,6 +263,15 @@ class TranslationExecutor:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
+            # Set exception handler to suppress cleanup errors
+            def exception_handler(loop, context):
+                exception = context.get("exception")
+                if exception:
+                    error_msg = str(exception).lower()
+                    if any(msg in error_msg for msg in ["event loop is closed", "connection_lost"]):
+                        return
+            loop.set_exception_handler(exception_handler)
+
             # Run async function
             result = loop.run_until_complete(
                 self.execute_async(ko_text, context, target_langs)
@@ -272,25 +287,34 @@ class TranslationExecutor:
             # Clean up event loop
             if loop:
                 try:
-                    # Cancel pending tasks
+                    # Cancel all pending tasks
                     pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
                     for task in pending:
                         task.cancel()
 
-                    # Wait for cancellation
+                    # Wait for cancellation with shorter timeout
                     if pending:
                         try:
                             loop.run_until_complete(
-                                asyncio.wait_for(
-                                    asyncio.gather(*pending, return_exceptions=True),
-                                    timeout=0.5,
-                                )
+                                asyncio.gather(*pending, return_exceptions=True)
                             )
                         except:
                             pass
+
+                    # Run pending callbacks
+                    try:
+                        loop.run_until_complete(asyncio.sleep(0))
+                    except:
+                        pass
 
                     # Close loop
                     if not loop.is_closed():
                         loop.close()
                 except:
                     pass
+                finally:
+                    # Ensure loop is removed from thread
+                    try:
+                        asyncio.set_event_loop(None)
+                    except:
+                        pass
