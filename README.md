@@ -284,7 +284,7 @@ MODEL_PRIORITY_INDEX=2  # gemma2-9b-it (더 빠름)
 4. 테스트 추가  
 5. 풀 리퀘스트 제출
 
-## 라이선스: AP
+## 라이선스: Apache 2.0 License
 
 ## 제작자 및 기술 스택
 
@@ -605,7 +605,7 @@ Contributions welcome! Please:
 4. Add tests
 5. Submit a pull request
 
-## License : APACHE 2.0
+## License : Apache License 2.0
 
 ## Credits
 
