@@ -21,7 +21,7 @@ LangChain과 LangGraph를 활용하여 **빌더 패턴**과 **책임 연쇄 패�
 
 #### 1. 빌더 패턴
 ```python
-# 유창한 인터페이스로 번역 파이프라인 구성
+# 파이프라인 인터페이스를 적용해 전처리, 후처리 등 다양한 작업을 추가 삭제하기에 용이함
 pipeline = (TranslationPipelineBuilder()
     .add_validation()
     .add_execution(executor, max_attempts=3)
@@ -84,7 +84,7 @@ langgraph_translator/
 
 ### 1. 저장소 복제
 ```bash
-git clone [https://github.com/yourusername/langgraph_translator](https://github.com/Jinkichae/LangGraph-SRT-Translator.git
+git clone https://github.com/Jinkichae/LangGraph-SRT-Translator.git
 cd langgraph_translator
 ```
 
